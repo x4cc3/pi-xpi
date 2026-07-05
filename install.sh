@@ -11,9 +11,20 @@ if [ -z "$PI_BIN" ]; then
 fi
 
 echo "Installing 3rd party extension dependencies..."
-$PI_BIN install github:fitchmultz/pi-codex-goal
-$PI_BIN install npm:pi-mcp-adapter
-$PI_BIN install npm:@tintinweb/pi-subagents
+
+# GitHub-hosted extension — pi treats bare org/repo as remote spec
+if ! $PI_BIN install fitchmultz/pi-codex-goal 2>/dev/null; then
+  echo "  pi install failed for fitchmultz/pi-codex-goal, falling back to npm"
+  npm install --no-save github:fitchmultz/pi-codex-goal 2>/dev/null || echo "  (fallback skipped)"
+fi
+
+# npm-scoped packages — try pi, then npm
+for pkg in pi-mcp-adapter @tintinweb/pi-subagents; do
+  if ! $PI_BIN install "npm:${pkg}" 2>/dev/null; then
+    echo "  pi install failed for ${pkg}, falling back to npm"
+    npm install --no-save "${pkg}" 2>/dev/null || echo "  (fallback skipped for ${pkg})"
+  fi
+done
 
 # Setup custom subagents & prompts
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
