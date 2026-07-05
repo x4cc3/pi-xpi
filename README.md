@@ -13,12 +13,8 @@ You can automate the installation of XPI along with its required 3rd party exten
 Or install them manually:
 
 ```bash
-# Install dependencies
-pi install github:fitchmultz/pi-codex-goal
-pi install npm:pi-mcp-adapter
-
 # Install XPI
-pi install npm:pi-xpi
+pi install npm:@x4cc3/pi-xpi
 ```
 
 ### ExploitSearch API key
@@ -78,10 +74,10 @@ pi-xpi/
 ├── prompts/                 # /pentest, /bugbounty, /ctf, /hunt, /patch, /harness
 ├── agents/                  # auditor, exploit-dev, patch-writer, harness definitions
 ├── packages/
-│   ├── pi-casefile/         # SQLite case tracker
-│   ├── pi-exploitsearch/    # ExploitSearch tool
-│   ├── pi-lookup/           # web_search, web_fetch, context7, deepwiki
-│   ├── pi-codeintel/        # Codebase indexer & graph queries
-│   └── pi-xtodo/            # Todo tracking
+│   ├── @x4cc3/pi-casefile         # SQLite case tracker
+│   ├── @x4cc3/pi-exploitsearch    # ExploitSearch tool
+│   ├── @x4cc3/pi-lookup           # web_search, web_fetch, context7, deepwiki
+│   ├── @x4cc3/pi-codeintel        # Codebase indexer & graph queries
+│   └── @x4cc3/pi-xtodo            # Todo tracking
 └── package.json
 ```

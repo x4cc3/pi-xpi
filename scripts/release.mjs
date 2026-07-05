@@ -64,7 +64,7 @@ function bumpOrSetVersion(target) {
 
 	if (BUMP_TYPES.has(target)) {
 		console.log(`Bumping version (${target})...`);
-		run("npm version patch -ws --no-git-tag-version && npm version patch --no-git-tag-version");
+		run(`npm version ${target} -ws --no-git-tag-version && npm version ${target} --no-git-tag-version`);
 		run("node scripts/sync-versions.js");
 		return getVersion();
 	}

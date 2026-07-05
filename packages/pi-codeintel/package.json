@@ -1,5 +1,5 @@
 {
-  "name": "pi-codeintel",
+  "name": "@x4cc3/pi-codeintel",
   "version": "0.1.0",
   "description": "AST-based TypeScript/JavaScript code intelligence indexer and query tool for Pi Agent",
   "keywords": [
