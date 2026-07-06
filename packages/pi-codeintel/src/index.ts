@@ -101,10 +101,77 @@ async function getDb(workspace: string): Promise<DatabaseSync> {
 // ── File Hashing & Walking ──────────────────────────────────────────
 
 function getFileHash(content: string): string {
-  return createHash("sha256").update(content).digest("hex");
+  // SHA-1 is faster than SHA-256; sufficient for dedup (not crypto)
+  return createHash("sha1").update(content).digest("hex");
 }
 
-function walkDir(dir: string, callback: (filePath: string) => void) {
+/** Read .gitignore patterns from a directory, returning an array of glob-like patterns. */
+function readGitignore(dir: string): string[] {
+  const gitignorePath = path.join(dir, ".gitignore");
+  try {
+    const content = fs.readFileSync(gitignorePath, "utf-8");
+    return content
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => l && !l.startsWith("#"))
+      .map((l) => l.replace(/\/$/, "")); // strip trailing slash
+  } catch {
+    return [];
+  }
+}
+
+/** Check if a filename or relative path matches any gitignore pattern. */
+function matchesIgnore(name: string, patterns: string[]): boolean {
+  for (const p of patterns) {
+    if (p.startsWith("/")) {
+      if (name === p.slice(1)) return true;
+    } else if (name === p || name.endsWith(`/${p}`) || name.startsWith(p + "/")) {
+      return true;
+    }
+  }
+  return false;
+}
+
+const MAX_FILE_SIZE = 1_048_576; // skip files > 1MB (bundles, minified, generated)
+
+const SKIP_DIRS = new Set([
+  "node_modules",
+  ".git",
+  "dist",
+  "build",
+  ".pi",
+  ".gemini",
+  ".cache",
+  ".next",
+  ".turbo",
+  ".nyc_output",
+  "coverage",
+  ".codebase-memory",
+  "__pycache__",
+  ".venv",
+  ".tox",
+  "__generated__",
+  "generated",
+  ".generated",
+  "third_party",
+  "vendor",
+  "bower_components",
+  "cdn_modules",
+  "compiled",
+]);
+
+const INDEX_EXT = new Set([".ts", ".js", ".tsx", ".jsx", ".mjs", ".cjs", ".mts", ".cts"]);
+
+function walkDir(
+  dir: string,
+  callback: (filePath: string) => void,
+  rootDir = dir,
+  gitignorePatterns: string[] | null = null,
+) {
+  if (gitignorePatterns === null) {
+    gitignorePatterns = readGitignore(dir);
+  }
+
   let files: string[] = [];
   try {
     files = fs.readdirSync(dir);
@@ -112,8 +179,15 @@ function walkDir(dir: string, callback: (filePath: string) => void) {
     return;
   }
 
+  // Read nested .gitignore
+  const localPatterns = [...gitignorePatterns, ...readGitignore(dir)];
+
   for (const file of files) {
     const fullPath = path.join(dir, file);
+    const relPath = path.relative(rootDir, fullPath);
+
+    if (matchesIgnore(relPath, localPatterns)) continue;
+
     let stat: fs.Stats;
     try {
       stat = fs.statSync(fullPath);
@@ -122,20 +196,16 @@ function walkDir(dir: string, callback: (filePath: string) => void) {
     }
 
     if (stat.isDirectory()) {
-      if (
-        file === "node_modules" ||
-        file === ".git" ||
-        file === "dist" ||
-        file === "build" ||
-        file === ".pi" ||
-        file === ".gemini"
-      ) {
-        continue;
-      }
-      walkDir(fullPath, callback);
+      if (SKIP_DIRS.has(file)) continue;
+      walkDir(fullPath, callback, rootDir, localPatterns);
     } else if (stat.isFile()) {
+      // Skip declaration files, minified, and oversized files
+      if (file.endsWith(".d.ts") || file.endsWith(".d.mts") || file.endsWith(".d.cts")) continue;
+      if (file.includes(".min.") || file.includes("-min.")) continue;
+      if (stat.size > MAX_FILE_SIZE || stat.size === 0) continue;
+
       const ext = path.extname(file);
-      if (ext === ".ts" || ext === ".js" || ext === ".tsx" || ext === ".jsx") {
+      if (INDEX_EXT.has(ext)) {
         callback(fullPath);
       }
     }
@@ -365,83 +435,101 @@ async function indexWorkspace(
     "INSERT INTO imports (file_path, module_name, symbol_name) VALUES (?, ?, ?)",
   );
 
-  for (const p of filePaths) {
-    totalFiles++;
-    const relPath = path.relative(absRoot, p);
-    let content = "";
-    try {
-      content = fs.readFileSync(p, "utf-8");
-    } catch {
-      skippedFiles++;
-      continue;
-    }
-
-    const size = statSafe(p)?.size ?? 0;
-    const hash = getFileHash(content);
-
-    const existing = selectFile.get(relPath);
-    if (!force && existing && existing.hash === hash) {
-      skippedFiles++;
-      continue;
-    }
-
-    try {
-      updatedFiles++;
-
-      // Transactional clear
-      deleteFile.run(relPath);
-      deleteSymbols.run(relPath);
-      deleteCalls.run(relPath);
-      deleteImports.run(relPath);
-
-      // Parse
-      const { symbols, calls, imports } = parseSourceFile(ts, relPath, content);
-
-      insertFile.run(relPath, hash, size, null, new Date().toISOString());
-
-      const symbolIdMap = new Map<string, string>();
-      for (const sym of symbols) {
-        // Include startLine to guarantee uniqueness (overloads, same-named methods in
-        // different classes, etc. would otherwise collide on the PRIMARY KEY).
-        const symId = `${relPath}:${sym.name}:${sym.kind}:${sym.startLine}`;
-        symbolIdMap.set(sym.name, symId);
-        insertSymbol.run(
-          symId,
-          relPath,
-          sym.name,
-          sym.kind,
-          sym.startLine,
-          sym.endLine,
-          sym.docstring || null,
-          sym.signature || null,
-        );
+  db.exec("BEGIN");
+  try {
+    for (const p of filePaths) {
+      totalFiles++;
+      const relPath = path.relative(absRoot, p);
+      let content = "";
+      try {
+        content = fs.readFileSync(p, "utf-8");
+      } catch {
+        skippedFiles++;
+        continue;
       }
 
-      for (const call of calls) {
-        const callerId =
-          symbolIdMap.get(call.callerName) || `${relPath}:${call.callerName}:(global)`;
-        insertCall.run(callerId, call.calleeName, relPath, call.line);
+      const size = statSafe(p)?.size ?? 0;
+      if (size === 0 || size > MAX_FILE_SIZE) {
+        skippedFiles++;
+        continue;
+      }
+      const hash = getFileHash(content);
+
+      const existing = selectFile.get(relPath);
+      if (!force && existing && existing.hash === hash) {
+        skippedFiles++;
+        continue;
       }
 
-      for (const imp of imports) {
-        insertImport.run(relPath, imp.moduleName, imp.symbolName);
+      try {
+        updatedFiles++;
+
+        // Transactional clear
+        deleteFile.run(relPath);
+        deleteSymbols.run(relPath);
+        deleteCalls.run(relPath);
+        deleteImports.run(relPath);
+
+        // Parse
+        const { symbols, calls, imports } = parseSourceFile(ts, relPath, content);
+
+        insertFile.run(relPath, hash, size, null, new Date().toISOString());
+
+        const symbolIdMap = new Map<string, string>();
+        for (const sym of symbols) {
+          // Include startLine to guarantee uniqueness (overloads, same-named methods in
+          // different classes, etc. would otherwise collide on the PRIMARY KEY).
+          const symId = `${relPath}:${sym.name}:${sym.kind}:${sym.startLine}`;
+          symbolIdMap.set(sym.name, symId);
+          insertSymbol.run(
+            symId,
+            relPath,
+            sym.name,
+            sym.kind,
+            sym.startLine,
+            sym.endLine,
+            sym.docstring || null,
+            sym.signature || null,
+          );
+        }
+
+        for (const call of calls) {
+          const callerId =
+            symbolIdMap.get(call.callerName) || `${relPath}:${call.callerName}:(global)`;
+          insertCall.run(callerId, call.calleeName, relPath, call.line);
+        }
+
+        for (const imp of imports) {
+          insertImport.run(relPath, imp.moduleName, imp.symbolName);
+        }
+      } catch {
+        // A single unparseable file must not crash the entire index
+        skippedFiles++;
       }
-    } catch {
-      // A single unparseable file must not crash the entire index
-      skippedFiles++;
     }
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
   }
 
   // Cleanup files that no longer exist on disk
-  const allIndexedFiles = db.prepare("SELECT path FROM files").all() as { path: string }[];
-  for (const f of allIndexedFiles) {
-    const full = path.join(absRoot, f.path);
-    if (!fs.existsSync(full)) {
-      deleteFile.run(f.path);
-      deleteSymbols.run(f.path);
-      deleteCalls.run(f.path);
-      deleteImports.run(f.path);
+  db.exec("BEGIN");
+  try {
+    const allIndexedFiles = db.prepare("SELECT path FROM files").all() as { path: string }[];
+    for (const f of allIndexedFiles) {
+      const full = path.join(absRoot, f.path);
+      if (!fs.existsSync(full)) {
+        deleteFile.run(f.path);
+        deleteSymbols.run(f.path);
+        deleteCalls.run(f.path);
+        deleteImports.run(f.path);
+      }
     }
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
   }
 
   const totalSymbols = db.prepare("SELECT count(*) as count FROM symbols").get().count;
