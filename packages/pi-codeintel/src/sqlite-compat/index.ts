@@ -9,3 +9,4 @@ try {
 }
 
 export { DatabaseSync };
+export type DatabaseSync = any;
