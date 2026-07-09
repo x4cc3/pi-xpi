@@ -5,7 +5,7 @@
 // "*" peerDependencies with "Cannot read properties of null (reading 'matches')",
 // which broke the release on newer npm. A plain file write is deterministic and
 // never reconciles deps.
-import { readdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const bump = process.argv[2] || "patch";

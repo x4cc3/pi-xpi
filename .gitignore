@@ -1,6 +1,9 @@
 # Dependencies
 node_modules/
 
+# Local npm auth (never commit tokens)
+.npmrc
+
 # Build output
 dist/
 *.tsbuildinfo
