@@ -340,7 +340,10 @@ export function htmlToText(html: string): string {
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
     .replace(/&apos;/g, "'");
-  return s.replace(/[ \t]+/g, " ").replace(/\n{3,}/g, "\n\n").trim();
+  return s
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 /** Prefer browser text only when it is meaningfully richer than the static shell. */
@@ -353,7 +356,6 @@ export function preferRenderedText(staticText: string, renderedText: string): bo
   // Longer static pages: require 2x and +80 so chrome/nav noise alone doesn't win.
   return b > a * 2 && b >= a + 80;
 }
-
 
 // ── Diagnostic Error Handler ──────────────────────────────────────────
 
@@ -546,7 +548,11 @@ export default function websearchExtension(pi: ExtensionAPI) {
         // cannot see DOM injected by JavaScript; re-render the already
         // validated public URL with system chromium when we detect a shell.
         let renderedBy: string | undefined;
-        if (endpoint === "/fetch-web" && looksLikeSpaShell(data, textContent) && isPublicHttpHost(parsedUrl)) {
+        if (
+          endpoint === "/fetch-web" &&
+          looksLikeSpaShell(data, textContent) &&
+          isPublicHttpHost(parsedUrl)
+        ) {
           const chromiumPath = resolveChromiumPath();
           if (chromiumPath) {
             try {

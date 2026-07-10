@@ -18,9 +18,9 @@ afterEach(() => {
 
 describe("looksLikeSpaShell", () => {
   it("skips non-html and already browser-rendered content", () => {
-    expect(looksLikeSpaShell({ contentType: "text/markdown", retrievalMethod: "request" }, "x")).toBe(
-      false,
-    );
+    expect(
+      looksLikeSpaShell({ contentType: "text/markdown", retrievalMethod: "request" }, "x"),
+    ).toBe(false);
     expect(
       looksLikeSpaShell(
         { contentType: "text/html", retrievalMethod: "browser-html" },
@@ -30,9 +30,7 @@ describe("looksLikeSpaShell", () => {
   });
 
   it("flags thin HTML shells and JS-required markers", () => {
-    expect(
-      looksLikeSpaShell({ contentType: "text/html; charset=utf-8" }, "Loading..."),
-    ).toBe(true);
+    expect(looksLikeSpaShell({ contentType: "text/html; charset=utf-8" }, "Loading...")).toBe(true);
     expect(
       looksLikeSpaShell(
         { contentType: "text/html" },

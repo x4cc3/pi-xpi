@@ -140,9 +140,7 @@ describe("pi-lookup tool tests", () => {
     const { mkdtempSync, writeFileSync, chmodSync, rmSync } = await import("node:fs");
     const { tmpdir } = await import("node:os");
     const { join } = await import("node:path");
-    const {
-      __resetChromiumPathCacheForTests,
-    } = await import("../src/websearch.ts");
+    const { __resetChromiumPathCacheForTests } = await import("../src/websearch.ts");
 
     const dir = mkdtempSync(join(tmpdir(), "xpi-fake-chrome-"));
     const fakeChrome = join(dir, "chromium");
