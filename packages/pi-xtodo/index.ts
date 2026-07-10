@@ -11,21 +11,21 @@ import { Text, type TUI, truncateToWidth } from "@earendil-works/pi-tui";
 import { type Static, type TSchema, Type } from "@sinclair/typebox";
 
 /**
- * String enum as `{ type: "string", enum: [...] }` (provider-safe).
- * Do NOT use Type.Union(Type.Literal...) — that becomes anyOf/const and some
- * providers / Pi arg validators drop optional fields, so status-only updates
- * arrive as `{ action, id }` and fail hasMutation. Same approach as rpiv-todo
- * (via @earendil-works/pi-ai StringEnum).
+ * String enum as `{ type: "string", enum: [...] }` (provider-safe + TypeBox Kind "String").
+ *
+ * Do NOT use Type.Union(Type.Literal...) → anyOf/const (providers drop optional fields).
+ * Do NOT use Type.Unsafe → Kind "Unsafe"; Pi's typebox/Compile treats it as unknown.
+ * Type.String({ enum }) is Kind "String", works with Value.Convert/Check/Compile,
+ * and serializes as plain string enum (same end shape as rpiv-todo StringEnum).
  */
 function StringEnum<T extends readonly string[]>(
   values: T,
   options?: { description?: string },
 ): TSchema {
-  return Type.Unsafe({
-    type: "string",
+  return Type.String({
     enum: [...values],
     ...(options?.description ? { description: options.description } : {}),
-  });
+  }) as unknown as TSchema;
 }
 
 // ---------------------------------------------------------------------------
@@ -331,8 +331,11 @@ function applyMutation(state: TaskState, action: TaskAction, params: any): Reduc
         params.addBlockedBy !== undefined ||
         params.removeBlockedBy !== undefined;
       if (!hasMutation) {
+        const keys = Object.keys(params ?? {})
+          .sort()
+          .join(", ");
         return err(
-          "update requires at least one mutable field (subject, description, activeForm, status, owner, metadata, addBlockedBy, removeBlockedBy)",
+          `update requires at least one mutable field (subject, description, activeForm, status, owner, metadata, addBlockedBy, removeBlockedBy); received keys: [${keys}]`,
         );
       }
 
