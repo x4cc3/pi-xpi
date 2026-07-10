@@ -307,6 +307,63 @@ describe("pi-xtodo simplified tests", () => {
     assert.ok(!got2.content[0].text.includes("blockedBy"), got2.content[0].text);
   });
 
+  it("status-only update is a valid mutation", async () => {
+    const todoTool = pi.tools[0];
+    await todoTool.execute("1", { action: "create", subject: "Solo status" }, null, null, mockCtx);
+    const r = await todoTool.execute(
+      "2",
+      { action: "update", id: 1, status: "in_progress" },
+      null,
+      null,
+      mockCtx,
+    );
+    assert.ok(!r.isError, r.content[0].text);
+    assert.ok(r.content[0].text.includes("pending → in_progress"));
+    const r2 = await todoTool.execute(
+      "3",
+      { action: "update", id: 1, status: "completed" },
+      null,
+      null,
+      mockCtx,
+    );
+    assert.ok(!r2.isError, r2.content[0].text);
+    assert.ok(r2.content[0].text.includes("in_progress → completed"));
+  });
+
+  it("id-only update errors with a field list (not a silent no-op)", async () => {
+    const todoTool = pi.tools[0];
+    await todoTool.execute("1", { action: "create", subject: "Need fields" }, null, null, mockCtx);
+    const r = await todoTool.execute("2", { action: "update", id: 1 }, null, null, mockCtx);
+    assert.ok(r.isError);
+    assert.ok(r.content[0].text.includes("mutable field"));
+    assert.ok(r.content[0].text.includes("status"));
+  });
+
+  it("compact without todo history keeps live in-memory tasks", async () => {
+    const todoTool = pi.tools[0];
+    sessionManager.sessionId = "cache-invalidate-session";
+    sessionManager.branch = [];
+
+    await todoTool.execute("1", { action: "create", subject: "Live task" }, null, null, mockCtx);
+    await pi.emit("session_start", {}, mockCtx);
+
+    const updated = await todoTool.execute(
+      "2",
+      { action: "update", id: 1, status: "in_progress" },
+      null,
+      null,
+      mockCtx,
+    );
+    assert.ok(!updated.isError, updated.content[0].text);
+
+    // Compact with empty branch (no todo toolResults). Must not wipe live state.
+    sessionManager.branch = [];
+    await pi.emit("session_compact", {}, mockCtx);
+
+    const list = await todoTool.execute("3", { action: "list" }, null, null, mockCtx);
+    assert.ok(list.content[0].text.includes("[in_progress] #1 Live task"), list.content[0].text);
+  });
+
   it("rejects non-integer / non-positive ids", async () => {
     const todoTool = pi.tools[0];
     await todoTool.execute("1", { action: "create", subject: "T" }, null, null, mockCtx);

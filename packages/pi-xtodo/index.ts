@@ -310,6 +310,8 @@ function applyMutation(state: TaskState, action: TaskAction, params: any): Reduc
         return err("removeBlockedBy must be an array of numbers");
       }
 
+      // Explicitly-provided fields count even when empty (e.g. addBlockedBy: []).
+      // Models often send status-only updates; do not require a second field.
       const hasMutation =
         params.subject !== undefined ||
         params.description !== undefined ||
@@ -317,9 +319,13 @@ function applyMutation(state: TaskState, action: TaskAction, params: any): Reduc
         params.status !== undefined ||
         params.owner !== undefined ||
         params.metadata !== undefined ||
-        (addBlockedBy?.length ?? 0) > 0 ||
-        (removeBlockedBy?.length ?? 0) > 0;
-      if (!hasMutation) return err("update requires at least one mutable field");
+        params.addBlockedBy !== undefined ||
+        params.removeBlockedBy !== undefined;
+      if (!hasMutation) {
+        return err(
+          "update requires at least one mutable field (subject, description, activeForm, status, owner, metadata, addBlockedBy, removeBlockedBy)",
+        );
+      }
 
       if (params.subject !== undefined && !String(params.subject).trim()) {
         return err("subject cannot be empty");
@@ -327,6 +333,9 @@ function applyMutation(state: TaskState, action: TaskAction, params: any): Reduc
 
       let status = cur.status;
       if (params.status !== undefined) {
+        if (params.status !== null && typeof params.status !== "string") {
+          return err("status must be a string");
+        }
         if (status !== params.status && !VALID_TRANSITIONS[status].includes(params.status)) {
           return err(`illegal transition ${status} → ${params.status}`);
         }
@@ -688,17 +697,42 @@ export default function (pi: ExtensionAPI) {
     ],
     parameters: TodoParamsSchema,
 
+    // Coerce common LLM shapes before schema validation (string ids, etc.).
+    prepareArguments: (args: unknown) => {
+      const a = { ...((args ?? {}) as Record<string, unknown>) };
+      if (a.id !== undefined && a.id !== null && typeof a.id !== "number") {
+        const n = Number(a.id);
+        if (Number.isInteger(n) && n > 0) a.id = n;
+      }
+      for (const key of ["blockedBy", "addBlockedBy", "removeBlockedBy"] as const) {
+        if (!Array.isArray(a[key])) continue;
+        a[key] = (a[key] as unknown[]).map((v) => {
+          if (typeof v === "number") return v;
+          const n = Number(v);
+          return Number.isInteger(n) ? n : v;
+        });
+      }
+      return a;
+    },
+
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const action = params.action as TaskAction;
       const id = sid(ctx);
       const state = getSessionState(id);
-      const result = applyMutation(state, action, params);
-      sessions.set(id, result.state);
-      saveSessionState(id, result.state);
+      // Defensive copy: some runtimes pass a frozen/partial params object.
+      const raw = { ...((params ?? {}) as Record<string, unknown>) };
+      const result = applyMutation(state, action, raw);
+      if (!result.error) {
+        sessions.set(id, result.state);
+        saveSessionState(id, result.state);
+        // Branch length may not have advanced yet; drop cache so compact/tree
+        // cannot overwrite live state with a stale replay snapshot.
+        replayCache.delete(id);
+      }
 
       const details: TaskDetails = {
         action,
-        params: params as Record<string, unknown>,
+        params: raw,
         tasks: result.state.tasks,
         nextId: result.state.nextId,
         ...(result.error && { error: result.error }),
@@ -809,11 +843,30 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
+  const branchHasTodoHistory = (ctx: any): boolean => {
+    const branch = ctx.sessionManager.getBranch() ?? [];
+    return branch.some(
+      (e: any) => e?.message?.role === "toolResult" && e?.message?.toolName === TOOL_NAME,
+    );
+  };
+
+  /** Resolve state for compact/tree: branch wins when it has todo results; else keep live/disk. */
+  const resolveStateForRefresh = (ctx: any): TaskState => {
+    const id = sid(ctx);
+    if (branchHasTodoHistory(ctx)) {
+      return replayFromBranch(ctx);
+    }
+    // No todo tool results on the branch yet. Do not clobber in-memory progress
+    // with an empty replay (that was wiping tasks on compact).
+    if (sessions.has(id)) return sessions.get(id)!;
+    return restoreSessionState(id) ?? freshState();
+  };
+
   const replayAndRefresh = (ctx: any): void => {
     let isForeground = false;
     try {
       const id = sid(ctx);
-      sessions.set(id, replayFromBranch(ctx));
+      sessions.set(id, resolveStateForRefresh(ctx));
       isForeground = id === activeRenderSession;
     } catch (e) {
       if (!/stale after session replacement/.test(String(e))) throw e;
@@ -828,23 +881,15 @@ export default function (pi: ExtensionAPI) {
     let id: string;
     try {
       id = sid(ctx);
-      const branch = ctx.sessionManager.getBranch();
-      const replayed = replayFromBranch(ctx);
-      const hasTodoHistory = branch.some(
-        (e: any) => e?.message?.role === "toolResult" && e?.message?.toolName === TOOL_NAME,
-      );
-      // Fallback to disk only when the message history hasn't been replayed yet,
-      // so a restart can recover in-progress tasks.
-      if (!hasTodoHistory) {
-        const restored = restoreSessionState(id);
-        if (restored) {
-          sessions.set(id, restored);
-          replayCache.set(id, { len: branch.length, state: restored });
-        } else {
-          sessions.set(id, replayed);
-        }
+      const branch = ctx.sessionManager.getBranch() ?? [];
+      if (branchHasTodoHistory(ctx)) {
+        sessions.set(id, replayFromBranch(ctx));
       } else {
-        sessions.set(id, replayed);
+        // Restart recovery: disk fallback when message history has no todo results.
+        const restored = restoreSessionState(id);
+        const state = restored ?? freshState();
+        sessions.set(id, state);
+        replayCache.set(id, { len: branch.length, state });
       }
     } catch (e) {
       if (!/stale after session replacement/.test(String(e))) throw e;
