@@ -1,6 +1,6 @@
 ---
 name: engage
-description: Authenticated web-pentest sessions for Pi — hold a user-supplied target identity (cookie / OAuth client-credentials / mTLS) and run curl / nuclei / httpx / ffuf with the auth injected. Use when the agent must operate against an authenticated web target inside a sanctioned engagement.
+description: Authenticated web-pentest sessions for Pi — hold a user-supplied target identity (cookie / OAuth client-credentials / mTLS) and run curl / httpx / ffuf with the auth injected. Use when the agent must operate against an authenticated web target inside a sanctioned engagement.
 ---
 
 # engage
@@ -28,16 +28,30 @@ Session management: `add | get | list | token | delete | clear`
   `curlFlags`, and a ready `curl` example.
 
 Pentest (auth injected): `run | send | spider | scan`
-- `run tool=<cli>` — run a pentest CLI (`curl | nuclei | httpx | ffuf | subfinder | whatweb …`)
+- `run tool=<cli>` — run a pentest CLI (`curl | httpx | ffuf`)
   with auth injected.
 - `send` — single authenticated HTTP request; also returns a ready `curl` command.
 - `spider` — crawl in-scope links with the session applied.
-- `scan` — run nuclei if installed, else a passive security-header check.
+- `scan` — fast passive security-header check (no external scanner).
+
+Account self-registration (autonomous low-priv seat): `signup`
+- `signup signupUrl=<reg endpoint> target=<host> [signupFields=...] [verifyStrategy=auto]`
+  creates a throwaway account through the target's own signup flow, captures the resulting
+  session, and verifies email automatically. The agent **owns the identity it creates** —
+  no human supplies credentials.
+- Verification chain (`verifyStrategy=auto`): (1) if the signup response leaks a verify token/link,
+  use it; (2) else spin a disposable inbox (mail.tm, free, no API key), poll for the verification
+  email, extract the link, and click it; (3) `none` skips verification (use to test whether the
+  app enforces it server-side). If verification is impossible (SMS, captcha, domain-lock) the
+  agent reports the blocker as a case instead of asking the human.
+- Placeholders in `signupFields`: `<EMAIL>`, `<USER>`, `<PASS>` are auto-filled.
+- This is the realistic unauth → low-priv attacker seat. The human still scopes the *target*
+  (authorized engagement); the agent only owns the throwaway account it provisions.
 
 ## Typical flow
 1. `engage action=add mode=oauth-client-credentials tokenUrl=… clientId=… clientSecret=… scope=… caseId=<case>` — create the sanctioned session.
 2. `engage action=token id=<id>` — resolve auth (headers + curlFlags + curl example).
-3. `engage action=run tool=nuclei args=["-u",<target>]` (or `tool=httpx` / `tool=ffuf`) — pentest with auth.
+3. `engage action=run tool=httpx args=["-u",<target>]` (or `tool=ffuf`) — pentest with auth.
 4. Log observations to `casefile`.
 
 ## Companion

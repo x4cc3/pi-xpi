@@ -11,10 +11,10 @@
  *        - mtls                     : client-certificate identity presented in the TLS handshake
  *
  *   2. Pentest, authenticated, using the tools you already have (pdtm suite):
- *        run   — run a pentest CLI (nuclei/httpx/ffuf/curl/...) with auth injected
+ *        run   — run a curated pentest CLI (curl/httpx/ffuf) with auth injected
  *        send  — single authenticated HTTP request (returns a curl command too)
  *        spider— crawl in-scope links with the session applied
- *        scan  — run nuclei if installed, else a passive security-header check
+ *        scan  — fast passive security-header check (no external scanner)
  *
  * No MITM proxy required: the resolved auth (Bearer / cookie / mTLS flags) is
  * handed straight to curl and the pdtm tools, which capture their own output.
@@ -28,10 +28,12 @@ import { Text } from "@earendil-works/pi-tui";
 import { type Static, Type } from "@sinclair/typebox";
 import {
   Engage,
+  type EngageLoginInput,
   type EngageRunInput,
   type EngageScanInput,
   type EngageSendInput,
   type EngageSetupInput,
+  type EngageSignupInput,
   type EngageSpiderInput,
   type OpResult,
 } from "./engage.ts";
@@ -58,9 +60,23 @@ const engage = new Engage();
 // ---------------------------------------------------------------------------
 export const EngageParamsSchema = Type.Object({
   action: StringEnum(
-    ["add", "get", "list", "token", "delete", "clear", "run", "send", "spider", "scan"] as const,
+    [
+      "add",
+      "get",
+      "list",
+      "token",
+      "delete",
+      "clear",
+      "run",
+      "send",
+      "spider",
+      "scan",
+      "signup",
+      "login",
+    ] as const,
     {
-      description: "Session: add|get|list|token|delete|clear — Pentest: run|send|spider|scan",
+      description:
+        "Session: add|get|list|token|delete|clear — Pentest: run|send|spider|scan — Account: signup|login",
     },
   ),
 
@@ -103,7 +119,7 @@ export const EngageParamsSchema = Type.Object({
   // run fields (pdtm tool bridge)
   tool: Type.Optional(
     Type.String({
-      description: "Pentest CLI to run (curl | nuclei | httpx | ffuf | subfinder | whatweb | ...)",
+      description: "Pentest CLI to run (curl | httpx | ffuf)",
     }),
   ),
   args: Type.Optional(
@@ -125,6 +141,38 @@ export const EngageParamsSchema = Type.Object({
     Type.Array(Type.String(), { description: "In-scope hosts for spider (default: url host)" }),
   ),
   depth: Type.Optional(Type.Number({ description: "Spider max depth (default 2)" })),
+
+  // signup fields (autonomous low-priv account creation)
+  signupUrl: Type.Optional(
+    Type.String({
+      description: "Registration endpoint URL (signup). Agent creates a throwaway account.",
+    }),
+  ),
+  signupFields: Type.Optional(
+    Type.Record(Type.String(), Type.String(), {
+      description:
+        "Field map for the signup POST body. Use placeholders <EMAIL>, <USER>, <PASS> (auto-filled). e.g. { email: '<EMAIL>', password: '<PASS>', username: '<USER>' }",
+    }),
+  ),
+  verifyStrategy: Type.Optional(
+    StringEnum(["auto", "response", "inbox", "none"] as const, {
+      description:
+        "Verification: auto (response token, then disposable inbox) | response (token in signup body) | inbox (temp-mail poll) | none (skip)",
+    }),
+  ),
+  // login fields (prove a created account exists by logging in)
+  loginUrl: Type.Optional(
+    Type.String({
+      description:
+        "Login endpoint URL. After signup, the agent logs in with the same credentials to prove the account was created.",
+    }),
+  ),
+  loginFields: Type.Optional(
+    Type.Record(Type.String(), Type.String(), {
+      description:
+        "Field map for the login POST body. Use placeholders <EMAIL>, <USER>, <PASS> (auto-filled from the signup). e.g. { email: '<EMAIL>', password: '<PASS>' }",
+    }),
+  ),
 });
 
 export type EngageParams = Static<typeof EngageParamsSchema>;
@@ -157,15 +205,15 @@ export default function piEngage(pi: ExtensionAPI) {
     name: TOOL_NAME,
     label: "Engage",
     description:
-      "Authenticate to an authorized target and run web-pentest actions. Manage sessions (cookie / OAuth client-credentials / mTLS), then run curl / nuclei / httpx / ffuf / etc. with the auth injected — no MITM proxy needed. The agent never invents or borrows credentials — a human supplies the target + identity.",
+      "Authenticate to an authorized target and run web-pentest actions. Manage sessions (cookie / OAuth client-credentials / mTLS), then run curl / httpx / ffuf with the auth injected — no MITM proxy needed. The agent never invents or borrows credentials — a human supplies the target + identity.",
     promptSnippet: "Authenticate to a target and run web-pentest actions (sessions, proxy, scan)",
     promptGuidelines: [
       "Use `engage` to hold the credentials a USER supplies for an authorized target — never invent or borrow them.",
-      "Resolve a session with `engage action=token`, then run tools directly: `engage action=run tool=nuclei` / `tool=httpx` / `tool=ffuf` inject the auth automatically.",
+      "Resolve a session with `engage action=token`, then run tools directly: `engage action=run tool=httpx` / `tool=ffuf` inject the auth automatically.",
       "Use `engage action=send` for a single authenticated request; the result includes a ready `curl` command.",
       "Prefer oauth-client-credentials or mtls over cookie: they are the agent's own identity and need no human re-login.",
       "Link sessions to a casefile case with `caseId` so findings stay scoped to one engagement.",
-      "`engage action=scan` runs nuclei if installed, else a passive security-header check.",
+      "`engage action=scan` runs a fast passive security-header check.",
     ],
     parameters: EngageParamsSchema,
 
@@ -193,6 +241,10 @@ export default function piEngage(pi: ExtensionAPI) {
             return toResult(await engage.spider(p as EngageSpiderInput));
           case "scan":
             return toResult(await engage.scan(p as EngageScanInput));
+          case "signup":
+            return toResult(await engage.signup(p as EngageSignupInput));
+          case "login":
+            return toResult(await engage.login(p as EngageLoginInput));
           default:
             return errResult(`unknown action: ${String(p.action)}`);
         }

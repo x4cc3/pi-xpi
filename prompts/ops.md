@@ -10,7 +10,11 @@ Follow the XPI evidence-first doctrine: a claim is only real when a PoC on disk 
 ## 0. Scope & rules (gate)
 - Pull the authorized scope / out-of-scope list / prohibited techniques.
 - If the target, endpoint, or technique is out of scope, stop.
-- If authentication, credentials, or session cookies are required, **pause and ask the user** — never invent or borrow them.
+- If authentication, credentials, or session cookies are required:
+  1. Check `engage action=list` for an existing session matching the target — reuse it.
+  2. Else try `engage action=signup signupUrl=<reg endpoint> target=<host>` to create a throwaway
+     account through the target's own signup flow and auto-verify email. The agent owns the identity it creates — no human supplies credentials.
+  3. Only **pause and ask the user** if no session exists, signup is blocked (SMS/captcha/domain-lock), and the target clearly requires a pre-provisioned identity.
 
 ## 1. Recon (research, don't guess)
 - `ExploitSearch` for techniques mapped to the target's stack.

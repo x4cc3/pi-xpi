@@ -1,6 +1,6 @@
 # pi-casefile
 
-Local-first security case ledger for Pi Agent. Tracks hypotheses → confirmed findings with a hard PoC gate, SQLite storage, and an isolated PoC runner.
+Local security case book for Pi Agent. Keeps your guesses → proven findings behind a PoC gate, saved in SQLite, run in a sandbox.
 
 ## Install
 
@@ -12,7 +12,7 @@ Or via the XPI umbrella package: `pi install npm:@xaccefy/pi-xpi`
 
 ## XP mode (default OFF)
 
-The cyber-workflow context injection is **quiet by default** so normal dev work is not flooded with security process text.
+The attack-mode text stays **quiet by default** so your normal coding isn't buried in security talk.
 
 | Control | Effect |
 |---------|--------|
@@ -21,7 +21,7 @@ The cyber-workflow context injection is **quiet by default** so normal dev work 
 | `PI_XP_MODE=on` | Force ON for this process (overrides file) |
 | `PI_XP_MODE=off` | Force OFF |
 
-When **ON**, every prompt injects the attacker-oriented cyber workflow plus any active (non-killed/non-reported) cases. When **OFF**, nothing is injected; tools remain available.
+When **ON**, every prompt gets the attacker-minded workflow plus any open cases. When **OFF**, nothing is added; tools still work.
 
 State is persisted next to the ledger as `xp-mode` (e.g. `.pi/xp-mode`).
 
@@ -42,12 +42,12 @@ hypothesis → investigating → confirmed → reported
               blocked         killed (terminal)
 ```
 
-- **investigating** requires `evidence` + `confidence`
-- **confirmed** only via `PromoteFinding` (PoC exit 0) — `CaseUpdate(status:"confirmed")` is rejected
-- **reported** requires `CaseReport` first
-- **killed** / **reported** are terminal (no further field edits)
+- **investigating** needs `evidence` + `confidence`
+- **confirmed** only by running the PoC (`PromoteFinding`, exit 0) — you can't just set status to confirmed
+- **reported** needs `CaseReport` first
+- **killed** / **reported** are final (no more edits)
 
-There is **no** `impact_proof` tool field. Put proof text in `impact` or `evidence`.
+There is **no** `impact_proof` field. Put proof in `impact` or `evidence`.
 
 ## Tools
 

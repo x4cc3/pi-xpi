@@ -34,7 +34,7 @@ export PREVIEW_IS_API_KEY="rk_yourkeyhere"
 
 | Tool | Use for |
 |------|---------|
-| auth / /auth | Store & resolve authenticated sessions for targets (cookie, OAuth client-credentials, mTLS) |
+| auth / /auth | Hold & use login sessions for targets (cookie, OAuth client-credentials, mTLS); **engage signup/login** to make a temp account on its own + prove it |
 | ExploitSearch | Attack techniques, primitives, bypasses (`PREVIEW_IS_API_KEY`) |
 | web_search | CVEs, advisories, documentation |
 | web_fetch | Page content; SPA pages re-rendered via Chromium when the shell is thin |

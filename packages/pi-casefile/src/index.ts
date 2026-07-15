@@ -487,6 +487,43 @@ Keep killed reasons explicit in assumptions/blockers:
 - \`environmental_issue\`
 - \`not_applicable\` (true bug / interesting behavior, no realistic attacker value)
 Documenting kills prevents re-opening dead ends.
+
+---
+
+## 9. Tool Ecosystem (USE PROACTIVELY)
+
+You have offensive tools beyond casefile. Use them — do not rely on memory or guesswork.
+
+| Tool | When to use | Do NOT skip it when... |
+|------|------------|------------------------|
+| **ExploitSearch** | Before writing any PoC. Search for known techniques, bypasses, and attack primitives relevant to the target stack/vuln class. | ...you are investigating a hypothesis or building a PoC. Ground your approach in real write-ups, not memory. |
+| **engage** | When testing a live web target that requires authentication. Add a session (cookie/OAuth/mTLS) then run curl/httpx/ffuf with auth injected. | ...the user has supplied credentials or a target URL for authenticated testing. |
+| **web_search** | To find CVEs, advisories, prior bug reports, documentation, or any live information about the target. | ...you need to check if a vulnerability is known, find version-specific issues, or research a technology. |
+| **web_fetch** | To read full page content from a URL you already have (advisory, write-up, target page). | ...you have a specific URL to inspect. |
+| **context7** | To look up current library/framework API docs and behavior. | ...you need to understand how a framework feature works (auth, parsing, routing). |
+| **deepwiki** | To ask questions about a public GitHub repository's architecture and internals. | ...the target is an open-source project and you need to understand its design. |
+| **codebase-memory-mcp** | To index a codebase and trace source-to-sink paths. index_repository, get_architecture, search_graph, trace_path. | ...you have access to the target source code and need structural reachability analysis. |
+
+**pdtm CLI tools** (run via bash; each takes auth/flags differently — read the flags, do not guess):
+- subfinder -d host (-silent, -t threads) — passive subdomain enum from API sources; no target auth. Pipe to httpx, not straight to nuclei.
+- httpx -u <url> / -l hosts.txt (-t threads, -td tech-detect, -mc match-status, -H "Name: Value") — fast probe of authed endpoints; supports Header/Cookie/Bearer.
+- ffuf -u <url> -w wordlist (-t threads, -rate, -H "..." -b "c=v", -mc/-fs filters) — authed fuzzing / content discovery.
+- whatweb <url> (-a aggression 1-4, -t threads, --cookie) — tech fingerprint; positional URL, no -u.
+- naabu -host <ip> / -l (-p ports, -rate, -c top-ports) — port scan; hosts, not web-auth.
+- katana -u <url> / -list (-d depth, -jc js-crawl, -H "...") — crawl (engage spider already does authed crawl).
+- nuclei -l hosts.txt / -u <url> (-tags, -severity, -type http, -silent; -c threads -bs host-batch -rl rate-limit -timeout 5 -retries 0): FAST when filtered, slow only if naive.
+  - Do not run all 9000+ templates. Filter: -tags cve,exposure,rce -severity critical,high -type http -t http/misconfiguration/.
+  - Pre-filter targets: subfinder -> httpx -mc 200,403 -> nuclei (cuts ~80% of work).
+  - Tune: -c 100-200 -bs 50-100 -rl 300 (avoid Cloudflare tarpit) -timeout 5 -retries 0 -mhe 10.
+  - Many hosts: -scan-strategy host-spray (v3). Few hosts many templates: template-spray.
+- engage is auth/session/creds only (cookie/OAuth/mTLS, signup/login) — not a general scanner.
+
+**Default behavior when XP mode is ON:**
+1. Start recon with ExploitSearch + web_search before diving into code.
+2. Use engage for any authenticated web target the user has set up.
+3. Use context7/deepwiki to understand framework internals before claiming a vuln.
+4. Use codebase-memory-mcp (if available) to prove reachability structurally.
+5. Log everything to casefile (CaseAdd/CaseUpdate). Do not skip the ledger.
 `.trim();
 
 function sanitizeContextText(v?: string, max = 160): string | undefined {

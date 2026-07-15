@@ -1,10 +1,12 @@
 import assert from "node:assert";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { MockExtensionAPI } from "../../../test-utils.ts";
-import { buildToolArgs, Engage, headersToFlags, parseToolOutput } from "../src/engage.ts";
+import { buildToolArgs, Engage, headersToFlags } from "../src/engage.ts";
+import { DisposableInbox } from "../src/inbox.ts";
 import registerEngage from "../src/index.ts";
 import type { AuthSession } from "../src/store.ts";
-import { clearSessions } from "../src/store.ts";
+import { clearSessions, getSession, listSessions } from "../src/store.ts";
+import type { FetchImpl } from "../src/types.ts";
 
 function fakeFetch(
   status = 200,
@@ -19,21 +21,7 @@ function fakeFetch(
 }
 
 function fakeExec() {
-  return async (tool: string, args: string[]) => {
-    if (tool === "nuclei" && args.includes("-version")) {
-      return { code: 1, stdout: "", stderr: "nuclei: command not found" };
-    }
-    if (tool === "nuclei") {
-      const issue = JSON.stringify({
-        template: "xss",
-        severity: "high",
-        host: "https://shop.example.com",
-        "matched-at": "https://shop.example.com/a",
-      });
-      return { code: 0, stdout: `${issue}\n`, stderr: "" };
-    }
-    return { code: 0, stdout: "ok", stderr: "" };
-  };
+  return async (_tool: string, _args: string[]) => ({ code: 0, stdout: "ok", stderr: "" });
 }
 
 function cookieSession(over: Partial<AuthSession> = {}): AuthSession {
@@ -135,16 +123,14 @@ describe("pi-engage", () => {
 describe("Engage class (pdtm bridge)", () => {
   afterEach(() => clearSessions());
 
-  it("run injects auth into nuclei and captures findings", async () => {
+  it("run injects auth into httpx", async () => {
     const e = new Engage({ execImpl: fakeExec(), fetchImpl: fakeFetch() });
     e.addSession(cookieSession());
-    const r = await e.run({ tool: "nuclei", url: "https://shop.example.com", sessionId: "s1" });
+    const r = await e.run({ tool: "httpx", url: "https://shop.example.com", sessionId: "s1" });
     assert.strictEqual(r.isError, undefined);
-    const d = r.details as { command: string; exitCode: number; findings: { type: string }[] };
+    const d = r.details as { command: string; exitCode: number };
     assert.match(d.command, /-H 'Cookie: session=abc123'/);
     assert.match(d.command, /-u https:\/\/shop.example.com/);
-    assert.strictEqual(d.findings.length, 1);
-    assert.strictEqual(d.findings[0].type, "xss");
   });
 
   it("run uses a positional URL for curl", async () => {
@@ -230,7 +216,7 @@ describe("Engage class (pdtm bridge)", () => {
     assert.ok(visited[0].includes("shop.example.com"));
   });
 
-  it("scan falls back to a passive header check when nuclei is absent", async () => {
+  it("scan runs a passive header check", async () => {
     const e = new Engage({ execImpl: fakeExec(), fetchImpl: fakeFetch(200, "<html></html>") });
     e.addSession(cookieSession({ cookie: "x=1" }));
     const r = await e.scan({ url: "https://shop.example.com/", sessionId: "s1" });
@@ -269,7 +255,7 @@ describe("auth flag helpers", () => {
       "A: B",
       "https://t",
     ]);
-    assert.deepStrictEqual(buildToolArgs("nuclei", "https://t", ["-H", "A: B"], ["-silent"]), [
+    assert.deepStrictEqual(buildToolArgs("httpx", "https://t", ["-H", "A: B"], ["-silent"]), [
       "-H",
       "A: B",
       "-u",
@@ -277,14 +263,275 @@ describe("auth flag helpers", () => {
       "-silent",
     ]);
   });
+});
 
-  it("parseToolOutput extracts nuclei issues", () => {
-    const out = parseToolOutput(
-      "nuclei",
-      `${JSON.stringify({ template: "xss", severity: "high", "matched-at": "https://t/a" })}\nnot-json\n`,
-    );
-    assert.strictEqual(out.length, 1);
-    assert.strictEqual(out[0].type, "xss");
-    assert.strictEqual(out[0].severity, "high");
+describe("DisposableInbox + signup", () => {
+  function fakeFetchRouter(opts: { leak?: boolean; cookie?: boolean } = {}) {
+    const fetchImpl: FetchImpl = async (input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url.endsWith("/domains")) {
+        return jsonResp({ "hydra:member": [{ domain: "mail.tm" }] });
+      }
+      if (url.endsWith("/accounts")) {
+        return jsonResp({ id: "a1", address: "x@mail.tm" });
+      }
+      if (url.endsWith("/token")) {
+        return jsonResp({ token: "TOK" });
+      }
+      if (url.endsWith("/messages") && method === "GET") {
+        return jsonResp({
+          "hydra:member": [
+            {
+              id: "m1",
+              subject: "Verify",
+              text: "confirm https://target.test/verify?t=abc",
+              html: "",
+            },
+          ],
+        });
+      }
+      if (/\/messages\/m1$/.test(url)) {
+        return jsonResp({
+          id: "m1",
+          subject: "Verify",
+          text: "confirm https://target.test/verify?t=abc",
+          html: "",
+        });
+      }
+      if (url.endsWith("/register")) {
+        if (opts.cookie) {
+          return withCookieResp(
+            "session=auto123",
+            opts.leak ? "see https://target.test/verify?t=leak" : "",
+          );
+        }
+        return textResp(200, opts.leak ? "verify at https://target.test/verify?t=leak" : "welcome");
+      }
+      if (url.includes("/verify")) {
+        return textResp(200, "verified");
+      }
+      return textResp(200, "ok");
+    };
+    return { fetchImpl };
+  }
+
+  function jsonResp(body: unknown): Response {
+    return {
+      status: 200,
+      ok: true,
+      headers: new Headers({ "content-type": "application/json" }),
+      json: async () => body,
+      text: async () => JSON.stringify(body),
+    } as unknown as Response;
+  }
+  function textResp(status: number, body: string): Response {
+    return {
+      status,
+      ok: status >= 200 && status < 300,
+      headers: new Headers({ "content-type": "text/plain" }),
+      text: async () => body,
+      json: async () => ({}),
+    } as unknown as Response;
+  }
+  function withCookieResp(cookie: string, body: string): Response {
+    return {
+      status: 200,
+      ok: true,
+      headers: { get: () => null, getSetCookie: () => [cookie] } as unknown as Headers,
+      text: async () => body,
+      json: async () => ({}),
+    } as unknown as Response;
+  }
+
+  it("DisposableInbox creates an inbox and extracts a verification link", async () => {
+    const { fetchImpl } = fakeFetchRouter();
+    const inbox = await DisposableInbox.create(fetchImpl);
+    assert.match(inbox.address, /@mail\.tm$/);
+    const msg = await inbox.waitForMessage(() => true);
+    assert.ok(msg, "message received");
+    const link = DisposableInbox.extractVerificationLink(msg!);
+    assert.strictEqual(link, "https://target.test/verify?t=abc");
+  });
+
+  it("signup verifies via disposable inbox and stores a cookie session", async () => {
+    const { fetchImpl } = fakeFetchRouter({ cookie: true });
+    const e = new Engage({ fetchImpl, now: () => 0 });
+    const r = await e.signup({
+      signupUrl: "https://target.test/register",
+      target: "target.test",
+      verifyStrategy: "inbox",
+    });
+    assert.strictEqual(r.isError, undefined);
+    const d = r.details as { verified: boolean; mode: string; sessionId: string };
+    assert.strictEqual(d.verified, true);
+    assert.strictEqual(d.mode, "cookie");
+    const stored = getSession(d.sessionId);
+    assert.ok(stored, "session persisted");
+    assert.strictEqual(stored!.cookie, "session=auto123");
+  });
+
+  it("signup verifies from a token leaked in the signup response", async () => {
+    const { fetchImpl } = fakeFetchRouter({ leak: true });
+    const e = new Engage({ fetchImpl, now: () => 0 });
+    const r = await e.signup({
+      signupUrl: "https://target.test/register",
+      target: "target.test",
+      verifyStrategy: "response",
+    });
+    assert.strictEqual(r.isError, undefined);
+    const d = r.details as { verified: boolean };
+    assert.strictEqual(d.verified, true);
+  });
+
+  it("signup with strategy none skips verification and still creates a session", async () => {
+    const { fetchImpl } = fakeFetchRouter({ cookie: true });
+    const e = new Engage({ fetchImpl, now: () => 0 });
+    const r = await e.signup({
+      signupUrl: "https://target.test/register",
+      target: "target.test",
+      verifyStrategy: "none",
+    });
+    const d = r.details as { verified: boolean; sessionId: string };
+    assert.strictEqual(d.verified, false);
+    assert.ok(getSession(d.sessionId));
+  });
+
+  it("rejects signup without a signupUrl", async () => {
+    const e = new Engage({});
+    const r = await e.signup({ target: "target.test" });
+    assert.strictEqual(r.isError, true);
+  });
+
+  it("reports a false positive as rejected when the target returns an app-level error", async () => {
+    const fetchImpl: FetchImpl = async (input: string | URL) => {
+      if (String(input).endsWith("/register")) {
+        return textResp(
+          200,
+          JSON.stringify({
+            ResponseStatus: { Ack: "Failure", Errors: [{ Message: "captcha required" }] },
+          }),
+        );
+      }
+      return textResp(200, "ok");
+    };
+    const e = new Engage({ fetchImpl, now: () => 0 });
+    clearSessions();
+    const r = await e.signup({ signupUrl: "https://target.test/register", target: "target.test" });
+    assert.strictEqual(r.isError, true);
+    const d = r.details as { registered: boolean; reason: string };
+    assert.strictEqual(d.registered, false);
+    assert.match(d.reason, /captcha required/);
+    assert.strictEqual(listSessions().length, 0, "no session stored on rejection");
+  });
+
+  it("rejects signup on an HTTP error status", async () => {
+    const fetchImpl: FetchImpl = async (input: string | URL) => {
+      if (String(input).endsWith("/register")) return textResp(400, "bad request");
+      return textResp(200, "ok");
+    };
+    const e = new Engage({ fetchImpl, now: () => 0 });
+    const r = await e.signup({ signupUrl: "https://target.test/register", target: "target.test" });
+    assert.strictEqual(r.isError, true);
+    assert.strictEqual((r.details as { registered: boolean }).registered, false);
+  });
+
+  it("marks a registered-but-unverified account as unconfirmed, not success", async () => {
+    // /register accepts (HTTP 200, no app error) but no verification email ever arrives.
+    const fetchImpl: FetchImpl = async (input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/domains")) return jsonResp({ "hydra:member": [{ domain: "mail.tm" }] });
+      if (url.endsWith("/accounts")) return jsonResp({ id: "a1", address: "x@mail.tm" });
+      if (url.endsWith("/token")) return jsonResp({ token: "TOK" });
+      if (url.endsWith("/messages") && (init?.method ?? "GET") === "GET") {
+        return jsonResp({ "hydra:member": [] });
+      }
+      if (url.endsWith("/register")) return textResp(200, "welcome");
+      return textResp(200, "ok");
+    };
+    const e = new Engage({ fetchImpl, now: () => 0 });
+    const r = await e.signup({
+      signupUrl: "https://target.test/register",
+      target: "target.test",
+      verifyStrategy: "inbox",
+      verifyTimeoutMs: 1500,
+    });
+    assert.strictEqual(r.isError, undefined);
+    const d = r.details as { registered: boolean; verified: boolean; accountConfirmed: boolean };
+    assert.strictEqual(d.registered, true);
+    assert.strictEqual(d.verified, false);
+    assert.strictEqual(d.accountConfirmed, false, "unverified => existence unconfirmed");
+  });
+
+  it("confirms account creation via login when loginUrl accepts the credentials", async () => {
+    const fetchImpl: FetchImpl = async (input: string | URL) => {
+      const url = String(input);
+      if (url.endsWith("/register")) return textResp(200, "welcome");
+      if (url.endsWith("/login")) return withCookieResp("sid=abc", "");
+      return textResp(200, "ok");
+    };
+    const e = new Engage({ fetchImpl, now: () => 0 });
+    const r = await e.signup({
+      signupUrl: "https://target.test/register",
+      target: "target.test",
+      verifyStrategy: "none",
+      loginUrl: "https://target.test/login",
+      loginFields: { email: "<EMAIL>", password: "<PASS>" },
+    });
+    assert.strictEqual(r.isError, undefined);
+    const d = r.details as {
+      registered: boolean;
+      verified: boolean;
+      loginConfirmed: boolean;
+      accountConfirmed: boolean;
+    };
+    assert.strictEqual(d.registered, true);
+    assert.strictEqual(d.verified, false);
+    assert.strictEqual(d.loginConfirmed, true, "login succeeded => account exists");
+    assert.strictEqual(d.accountConfirmed, true);
+  });
+
+  it("marks account unconfirmed when login rejects the new credentials", async () => {
+    const fetchImpl: FetchImpl = async (input: string | URL) => {
+      const url = String(input);
+      if (url.endsWith("/register")) return textResp(200, "welcome");
+      if (url.endsWith("/login")) {
+        return textResp(
+          200,
+          JSON.stringify({
+            ResponseStatus: { Ack: "Failure", Errors: [{ Message: "invalid credentials" }] },
+          }),
+        );
+      }
+      return textResp(200, "ok");
+    };
+    const e = new Engage({ fetchImpl, now: () => 0 });
+    const r = await e.signup({
+      signupUrl: "https://target.test/register",
+      target: "target.test",
+      verifyStrategy: "none",
+      loginUrl: "https://target.test/login",
+    });
+    const d = r.details as {
+      registered: boolean;
+      loginConfirmed: boolean;
+      accountConfirmed: boolean;
+    };
+    assert.strictEqual(d.registered, true);
+    assert.strictEqual(d.loginConfirmed, false, "login failed => no proof of account");
+    assert.strictEqual(d.accountConfirmed, false);
+  });
+
+  it("standalone login action captures a session on success", async () => {
+    const fetchImpl: FetchImpl = async (input: string | URL) => {
+      if (String(input).endsWith("/login")) return withCookieResp("sid=abc", "");
+      return textResp(200, "ok");
+    };
+    const e = new Engage({ fetchImpl, now: () => 0 });
+    const r = await e.login({ loginUrl: "https://target.test/login", target: "target.test" });
+    assert.strictEqual(r.isError, undefined);
+    const d = r.details as { loggedIn: boolean; mode: string };
+    assert.strictEqual(d.loggedIn, true);
+    assert.strictEqual(d.mode, "cookie");
   });
 });

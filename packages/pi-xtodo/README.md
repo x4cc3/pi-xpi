@@ -1,6 +1,6 @@
 # pi-xtodo
 
-Task list for multi-step agent work: DAG `blockedBy` dependencies, TUI overlay, session replay + disk fallback.
+Task list for step-by-step agent work: `blockedBy` links (a DAG), TUI overlay, replay from history or save to disk.
 
 ## Install
 
@@ -12,12 +12,12 @@ pi install npm:@xaccefy/pi-xtodo
 
 | Action | Purpose |
 |--------|---------|
-| `create` | New task (`subject` required); optional `blockedBy`, `description`, `owner` |
-| `update` | Mutate fields / status / dependencies (`id` required) |
+| `create` | New task (`subject` needed); optional `blockedBy`, `description`, `owner` |
+| `update` | Change fields / status / links (`id` needed) |
 | `list` | Filter by `status`; `includeDeleted` for tombstones |
 | `get` | Full detail including blockedBy / blocks |
-| `delete` | Soft-delete (tombstone) |
-| `clear` | Wipe session task state |
+| `delete` | Soft-delete (kept as a tombstone) |
+| `clear` | Clear all tasks |
 
 ### Status lifecycle
 
@@ -26,19 +26,19 @@ pending ↔ in_progress → completed → deleted
                 ↘ deleted
 ```
 
-- `completed → pending` is **not** allowed (use a new task if you need to reopen).
-- Ids must be **positive integers** (string `"1"` is accepted; `"2.7"` / `"1e2"` are rejected).
+- `completed → pending` is **not** allowed (make a new task to reopen).
+- Ids must be **whole positive numbers** (`"1"` works; `"2.7"` / `"1e2"` are rejected).
 
 ### Dependencies
 
 - `blockedBy` / `addBlockedBy` / `removeBlockedBy` form a DAG; cycles are rejected.
-- **Deleting** a task (or `update status: deleted`) **scrubs** that id from every other task’s `blockedBy` so dependents are not stuck on tombstones.
+- **Deleting** a task (or `update status: deleted`) **pulls** its id out of every other task’s `blockedBy`, so dependents don’t hang on a tombstone.
 
 ### Persistence
 
-- Primary source of truth: session tool-result history (replay on `session_start` / compact / tree).
-- Fallback: `~/.pi/xtodo/<safe-session-id>.json` when branch history has no todo results yet.
-- Session ids are sanitized so they cannot path-traverse out of that directory.
+- Main copy: the session’s tool-result history (replay on `session_start` / compact / tree).
+- If that’s empty, use the disk file `~/.pi/xtodo/<safe-session-id>.json`.
+- Session ids are cleaned so they can’t escape the folder.
 
 ## Command
 

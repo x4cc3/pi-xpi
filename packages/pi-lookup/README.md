@@ -1,6 +1,6 @@
 # pi-lookup
 
-Web search, page fetch, library docs (Context7), and GitHub repo Q&A (DeepWiki) for Pi Agent. **No API keys** for search/fetch/docs (DeepWiki is public-repo only).
+Web search, page fetch, library docs (Context7), and GitHub Q&A (DeepWiki) for Pi Agent. **No API keys** for search/fetch/docs (DeepWiki is public repos only).
 
 ## Install
 
@@ -11,7 +11,7 @@ pi install npm:@xaccefy/pi-lookup
 ## Tools
 
 ### `web_search`
-Queries engines via the local `open-websearch` daemon (no API key).
+Asks search engines through the local `open-websearch` tool (no API key).
 
 - `query` (required)
 - `limit` (optional, default 10)
@@ -22,14 +22,14 @@ Fetches a URL as clean text/markdown (GitHub READMEs use a dedicated path).
 
 - `url` (required, http/https)
 
-**SPA / JS-rendered pages:** if the daemon only returns a thin HTML shell, `web_fetch` re-renders with system Chromium (`--headless --dump-dom`) when available and swaps in the richer text.
+**JS pages:** if it only sends back a bare HTML shell, `web_fetch` re-draws it with system Chromium (`--headless --dump-dom`) when present, and uses the fuller text.
 
 | Variable | Purpose |
 |----------|---------|
 | `PI_CHROMIUM_PATH` | Absolute path to chromium/chrome binary |
 | `PI_WEBSEARCH_PORT` | Daemon port (default `3210`) |
 
-Fallback binaries checked: `/usr/bin/chromium`, `/usr/sbin/chromium`, Chrome stable paths, etc. If Chromium is missing, static extraction is returned as-is.
+It also tries: `/usr/bin/chromium`, `/usr/sbin/chromium`, Chrome stable paths, etc. If Chromium isn’t there, you get the plain extract.
 
 ### `context7`
 Up-to-date library docs + examples.
@@ -46,8 +46,8 @@ Natural-language Q&A over a public GitHub repo.
 
 ## Lifecycle
 
-- **session_start**: best-effort warm-up of the `open-websearch` daemon (non-blocking).
-- **session_shutdown**: stops the daemon process started by this extension.
+- **session_start**: tries to start the `open-websearch` tool (non-blocking).
+- **session_shutdown**: stops the tool this add-on started.
 
 ## Development
 
